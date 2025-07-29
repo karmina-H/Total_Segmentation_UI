@@ -78,7 +78,7 @@ def visualize_and_modify(dicom_series_path, task_names):
     #     return
     
     print("에디터 실행")
-    editor = MaskEditor(dicom_series_path, task_names)
+    editor = MaskEditor(task_names)
     modified_masks = editor.get_modified_masks()
 
     # 수정된 마스크를 새로운 RTSTRUCT 파일로 저장 
