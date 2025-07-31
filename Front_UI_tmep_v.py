@@ -9,7 +9,8 @@ from totalsegmentator.python_api import totalsegmentator
 import glob
 import pydicom
 from rt_utils.rtstruct import RTStruct
-from tkinterdnd2 import DND_FILES, TkinterDnD  # tkinterdnd2 임포트
+from tkinterdnd2 import DND_FILES, TkinterDnD 
+import time
 
 
 '''
@@ -44,17 +45,13 @@ class ScrollableFrame(ttk.Frame):
 
 
 class MaskEditor:
-    """
-
-    Tkinter를 통해 인터랙티브하게 마스크를 편집하는 클래스.
-
-    """
     def __init__(self, task_names):
         # hu변환할때 필요한 변수들
         self.center_val = None
         self.width_val = None
         self.slope = None
         self.intercept = None
+
         self.ct_volume = None # dicom의 넘파이배열버전(x,y,z)
         self.dicom_folder = None # 원본 dicom폴더 경로
         self.d2_slices = None # dicom의 넘파이배열버전(x,y,z) -> dicom_to_np이 함수에서만 사용됨
@@ -66,19 +63,13 @@ class MaskEditor:
         self.isSemented = {} # 해당 task가 이미 분할한건지 boolean
         self.segmented_class_names = [] # 분할완료된 class이름들
 
-        
-        # for task_name in task_names:
-        #     self.isSemented[task_name] = False
-
         # # --- 상태 변수 ---
-        #self.current_slice_idx = self.ct_volume.shape[2] // 2
         self.current_slice_idx = None
         self.brush_size = 1
         self.drawing = False
         self.erasing = False # 지우기 상태 변수 추가
         self.d_key_pressed = False # 'd' 키 상태 변수 추가
         self.temp_line_mask = None
-        #self.temp_line_mask = np.zeros(self.ct_volume.shape[:2], dtype=bool) # 사용자가 마우스 좌클릭을 떼기 전까지 그리는 선을 임시로 저장하는 2D numpy 배열
 
         # --- 줌 & 팬 상태 변수 ---
         self.zoom_level = 1.0
@@ -87,20 +78,8 @@ class MaskEditor:
         self.canvas_img_x = 0
         self.canvas_img_y = 0
 
-
         # --- 색상 설정 ---
-        # task_names 개수만큼 균등간격으로 색상 추출
         self.colors = None
-        #self.colors = plt.cm.get_cmap('gist_rainbow', len(self.task_names))
-        # 각 task_names이름에 색상할당하고 딕셔너리로 저장
-        #self.roi_colors = {name: [int(c*255) for c in self.colors(i)[:3]] for i, name in enumerate(self.segmented_class_names)}
-
-
-        # --- Tkinter UI 설정 ---
-        # self.root = tk.Tk()
-        # self.root.title("Mask Editor (Tkinter)")
-        # self.root.geometry("1000x800") # 초기 창 크기
-
         self.root = TkinterDnD.Tk()
         self.root.title("Mask Editor (Tkinter) - Drag & Drop a DICOM folder")
         self.root.geometry("1000x800")
@@ -109,16 +88,13 @@ class MaskEditor:
         self.editing_roi_name = tk.StringVar(value=False)  # Editing ROI 의 string 초기값 할당
         self.segment_check_vars = {name: tk.BooleanVar(value=False) for name in self.task_names}
         self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
-        # self.active_rois = {self.roi_names[0]} # 화면에 표시되고 있는 roi 리스트 저장하는 set
         self.active_rois = {} # 화면에 표시되고 있는 roi 리스트 저장하는 set
         self.segmented = {} # segmentation된 task 저장하는 seg
-
 
         # --- UI 레이아웃 생성 ---
         self._setup_ui()
 
         # --- 드래그 앤 드롭 이벤트 바인딩 ---
-        # 파일/폴더를 드롭할 수 있도록 등록하고, 드롭 이벤트가 발생하면 _on_drop 함수를 호출합니다.
         self.root.drop_target_register(DND_FILES)
         self.root.dnd_bind('<<Drop>>', self._on_drop)
 
@@ -127,15 +103,12 @@ class MaskEditor:
         self._update_plot()
 
 
-
-
     def _on_drop(self, event):
         """폴더를 드래그 앤 드롭했을 때 호출되는 이벤트 핸들러"""
-        # 드롭된 폴더의 경로를 가져옵니다. 경로에 '{'와 '}'가 포함될 수 있어 제거합니다.
         folder_path = event.data.strip('{}')
         print(f"Folder dropped: {folder_path}")
 
-        # 유효한 폴더 경로인지 확인할 수 있습니다 (선택 사항).
+        # 폴더 유효성 확인
         # if not os.path.isdir(folder_path):
         #     self.status_label.config(text=f"Error: Not a valid folder: {folder_path}")
         #     return
@@ -144,21 +117,14 @@ class MaskEditor:
         self.status_label.config(text=f"Loading DICOM files from: {self.dicom_folder}")
         self.root.title(f"Mask Editor - {self.dicom_folder}")
 
-        # --- 데이터 로딩 및 관련 변수 설정 ---
-        # 폴더 경로를 얻었으므로, 이제 데이터를 로드하고 관련 변수들을 설정합니다.
-        # 이 로직은 원래 __init__에 있던 것입니다.
         try:
-            # self.dicom_to_np(self.dicom_folder) # dicom파일을 넘파이배열로 변환하고 정규화
-            # 아래는 위 함수의 실행을 가정한 더미 데이터입니다.
-            # 실제 dicom_to_np 함수를 여기에 호출해야 합니다.
-            print("Loading DICOM data...") # 가상 로딩 메시지
+            print("Loading DICOM data...") 
             self.dicom_to_np(self.dicom_folder) # dicom파일을 넘파이배열로 변환하고 정규화
             print("DICOM data loaded.")
         except Exception as e:
             self.status_label.config(text=f"Failed to load DICOM data: {e}")
             return
             
-
         self.masks_dict = {}
         self.isSemented = {task_name: False for task_name in self.task_names}
         self.segmented_class_names = [] # 초기화
@@ -177,8 +143,6 @@ class MaskEditor:
         self.canvas_img_x, self.canvas_img_y = 0, 0
 
         # --- 색상 및 UI 변수 재설정 ---
-        #self.colors = plt.cm.get_cmap('gist_rainbow', len(self.task_names))
-        #self.roi_colors = {name: [int(c*255) for c in self.colors(i)[:3]] for i, name in enumerate(self.segmented_class_names)}
         self.editing_roi_name = tk.StringVar(value=False)
         self.segment_check_vars = {name: tk.BooleanVar(value=False) for name in self.task_names}
         self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names}
@@ -186,16 +150,12 @@ class MaskEditor:
         self.segmented = {}
         
         # --- UI 업데이트 ---
-        # 데이터가 로드되었으므로 관련 목록을 다시 채웁니다.
         self._populate_segmen_rois(self.task_names)
         self._populate_visible_rois_list(self.segmented_class_names)
         self._populate_editing_rois_list(self.segmented_class_names)
 
-        # 로드된 DICOM 이미지의 첫 슬라이드를 화면에 표시합니다.
         self._update_plot()
         self.status_label.config(text="DICOM data loaded successfully. Ready to edit.")
-
-
 
 
     def _normalize_to_uint8(self, data, central_val ,width_val):
@@ -228,7 +188,6 @@ class MaskEditor:
          # segmetation task선택부분
         check_container_task = ttk.LabelFrame(left_frame, text="task")
         check_container_task.grid(row=0, column=0, pady=5, sticky="nsew")
-        #check_container1.pack(fill=tk.BOTH, expand=True, pady=5)
         
         ## 'Visible ROIs' 그룹 안에 검색창(Entry)을 만들어주는 부분
         self.visible_search_entry1 = ttk.Entry(check_container_task)
@@ -244,7 +203,6 @@ class MaskEditor:
         # visible roi부분
         check_container_visible = ttk.LabelFrame(left_frame, text="Visible ROIs")
         check_container_visible.grid(row=1, column=0, pady=5, sticky="nsew")
-        #check_container.pack(fill=tk.BOTH, expand=True, pady=5)
         
         ## 'Visible ROIs' 그룹 안에 검색창(Entry)을 만들어주는 부분
         self.visible_search_entry = ttk.Entry(check_container_visible)
@@ -259,7 +217,6 @@ class MaskEditor:
         # editing roi 부분
         radio_container = ttk.LabelFrame(left_frame, text="Editing ROI")
         radio_container.grid(row=2, column=0, pady=5, sticky="nsew")
-        #radio_container.pack(fill=tk.BOTH, expand=True, pady=5)
 
         self.editing_search_entry = ttk.Entry(radio_container)
         self.editing_search_entry.pack(fill=tk.X, padx=5, pady=(5,0))
@@ -359,7 +316,12 @@ class MaskEditor:
             if self.isSemented[name] == False:
                 print(f"{name} task segmentation진행중 ...")
                 temp_path = self.segmentation('dicom', self.dicom_folder, name)
+                start_time = time.time()
                 new_mask = self.get_mask_From_rtstruct(temp_path)
+                if new_mask is None:
+                    return
+                end_time = time.time()
+                print(f"rtstruct loading time = {end_time-start_time}")
                 self.isSemented[name] == True
                 if new_mask is not None:
                     print("mask가 존재합니다")
@@ -370,7 +332,6 @@ class MaskEditor:
                     self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
                     self.colors = plt.cm.get_cmap('gist_rainbow', len(self.segmented_class_names))
                     self.roi_colors = {name: [int(c*255) for c in self.colors(i)[:3]] for i, name in enumerate(self.segmented_class_names)}
-                # self.segmented_class_names = list(self.masks_dict.keys())
 
         for widget in self.visible_scroll_frame.scrollable_frame.winfo_children():
             # 이전에 랜더링된 목록 지우기
@@ -380,8 +341,6 @@ class MaskEditor:
             cb = ttk.Checkbutton(self.visible_scroll_frame.scrollable_frame, text=name, variable=self.check_vars[name], command=self._on_check_changed)
             cb.pack(anchor='w', padx=5)
 
-
-        
     def _on_d_press(self, event):
         self.d_key_pressed = True
 

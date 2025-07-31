@@ -1,0 +1,30 @@
+total segmentation runtime: 149.7724(sec) 
+total_mr segmentation runtime: 71.9682(sec) 
+lung_vessels segmentation runtime: 75.3135(sec) 
+body segmentation runtime: 35.4851(sec) 
+body_mr segmentation runtime: 46.6785(sec) 
+vertebrae_mr segmentation runtime: 42.2803(sec) 
+cerebral_bleed segmentation runtime: 36.1496(sec) 
+hip_implant segmentation runtime: 36.2072(sec) 
+pleural_pericard_effusion segmentation runtime: 58.2632(sec) 
+head_glands_cavities segmentation runtime: 43.4008(sec) 
+head_muscles segmentation runtime: 40.1130(sec) 
+headneck_bones_vessels segmentation runtime: 59.6086(sec) 
+headneck_muscles segmentation runtime: 78.1441(sec) 
+liver_vessels segmentation runtime: 69.8666(sec) 
+oculomotor_muscles segmentation runtime: 52.7003(sec) 
+lung_nodules segmentation runtime: 70.5639(sec) 
+kidney_cysts segmentation runtime: 53.8992(sec) 
+breasts segmentation runtime: 34.9034(sec) 
+liver_segments segmentation runtime: 61.4665(sec) 
+liver_segments_mr segmentation runtime: 56.7366(sec) 
+craniofacial_structures segmentation runtime: 38.9022(sec) 
+abdominal_muscles segmentation runtime: 100.3595(sec) 
+
+
+########################
+rtstruct loading time = 13.49735689163208 -> total_mr
+rtstruct loading time = 0.22566986083984375 -> abdominal_muscles
+rtstruct loading time = 0.754702091217041 -> breasts
+rtstruct loading time = 0.23088645935058594 -> abdominal_muscles
+
