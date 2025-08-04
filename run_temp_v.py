@@ -41,9 +41,6 @@ total_segmentator_names = [
 
 
 if __name__ == '__main__':
-    # task_names = ["total","total_mr","lung_vessels","body","body_mr","vertebrae_mr","cerebral_bleed","hip_implant","pleural_pericard_effusion","head_glands_cavities","head_muscles",
-    # "headneck_bones_vessels","headneck_muscles","liver_vessels""oculomotor_muscles","lung_nodules","kidney_cysts","breasts","liver_segments","liver_segments_mr",
-    # "craniofacial_structures","abdominal_muscles"]
 
     organ_names = []
 
