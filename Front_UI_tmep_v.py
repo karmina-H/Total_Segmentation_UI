@@ -13,7 +13,6 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 import time
 from rt_utils import RTStructBuilder
 
-
 '''
 좌클릭 -> 추가 mask생성
 우클릭 -> ct사진 이동
@@ -36,11 +35,9 @@ class ScrollableFrame(ttk.Frame):
                 scrollregion=canvas.bbox("all")
             )
         )
-
         canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
