@@ -24,6 +24,8 @@ abdominal_muscles segmentation runtime: 100.3595(sec)
 
 ########################
 rtstruct loading time = 13.49735689163208 -> total_mr
+
+
 rtstruct loading time = 0.22566986083984375 -> abdominal_muscles
 rtstruct loading time = 0.754702091217041 -> breasts
 rtstruct loading time = 0.23088645935058594 -> abdominal_muscles

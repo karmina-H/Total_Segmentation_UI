@@ -45,23 +45,26 @@ class ScrollableFrame(ttk.Frame):
 
 
 class MaskEditor:
-    def __init__(self, task_names):
+    def __init__(self, organ_names):
         # hu변환할때 필요한 변수들
         self.center_val = None
         self.width_val = None
         self.slope = None
         self.intercept = None
 
+        self.is_processing = False
+
         self.ct_volume = None # dicom의 넘파이배열버전(x,y,z)
         self.dicom_folder = None # 원본 dicom폴더 경로
         self.d2_slices = None # dicom의 넘파이배열버전(x,y,z) -> dicom_to_np이 함수에서만 사용됨
 
+        self.organ_names = organ_names # 모든장기이름 리스트
 
-        self.task_names = task_names
+        self.todosegment = [] # 지금 추론할 장기 이름들
 
         self.masks_dict = {} # class별로 mask를 boolean형태로(3차원, x,y,z)
-        self.isSemented = {} # 해당 task가 이미 분할한건지 boolean
-        self.segmented_class_names = [] # 분할완료된 class이름들
+        self.isSemented = {task_name: False for task_name in self.organ_names} # 해당 organ이 이미 분할한건지 boolean
+        self.segmented_class_names = [] # 분할완료된 organ이름들
 
         # # --- 상태 변수 ---
         self.current_slice_idx = None
@@ -86,7 +89,7 @@ class MaskEditor:
 
         # --- 상태 변수 (Tkinter용) ---
         self.editing_roi_name = tk.StringVar(value=False)  # Editing ROI 의 string 초기값 할당
-        self.segment_check_vars = {name: tk.BooleanVar(value=False) for name in self.task_names}
+        self.segment_check_vars = {name: tk.BooleanVar(value=False) for name in self.organ_names} # segmentation
         self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
         self.active_rois = {} # 화면에 표시되고 있는 roi 리스트 저장하는 set
         self.segmented = {} # segmentation된 task 저장하는 seg
@@ -126,7 +129,7 @@ class MaskEditor:
             return
             
         self.masks_dict = {}
-        self.isSemented = {task_name: False for task_name in self.task_names}
+        self.isSemented = {task_name: False for task_name in self.organ_names}
         self.segmented_class_names = [] # 초기화
 
         # --- 상태 변수 ---
@@ -144,13 +147,13 @@ class MaskEditor:
 
         # --- 색상 및 UI 변수 재설정 ---
         self.editing_roi_name = tk.StringVar(value=False)
-        self.segment_check_vars = {name: tk.BooleanVar(value=False) for name in self.task_names}
+        self.segment_check_vars = {name: tk.BooleanVar(value=False) for name in self.organ_names}
         self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names}
         self.active_rois = {}
         self.segmented = {}
         
         # --- UI 업데이트 ---
-        self._populate_segmen_rois(self.task_names)
+        self._populate_segmen_rois(self.organ_names)
         self._populate_visible_rois_list(self.segmented_class_names)
         self._populate_editing_rois_list(self.segmented_class_names)
 
@@ -186,18 +189,27 @@ class MaskEditor:
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True) # 남은 공간 모두차지 
 
          # segmetation task선택부분
-        check_container_task = ttk.LabelFrame(left_frame, text="task")
+        check_container_task = ttk.LabelFrame(left_frame, text="organs")
         check_container_task.grid(row=0, column=0, pady=5, sticky="nsew")
+
+        # 검색창과 버튼을 가로로 담을 프레임 생성 <<< 추가
+        top_frame = ttk.Frame(check_container_task)
+        top_frame.pack(fill=tk.X, padx=5, pady=5)
+
+
         
         ## 'Visible ROIs' 그룹 안에 검색창(Entry)을 만들어주는 부분
-        self.visible_search_entry1 = ttk.Entry(check_container_task)
-        self.visible_search_entry1.pack(fill=tk.X, padx=5, pady=(5,0))
+        self.visible_search_entry1 = ttk.Entry(top_frame)
+        self.visible_search_entry1.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.visible_search_entry1.bind("<KeyRelease>", self._filter_segment_rois) # 키보드 클릭시 마다  _filter_visible_rois함수로 필터링 수행
+         # 'Inference' 버튼을 top_frame에 추가 <<< 추가
+        self.inference_button = ttk.Button(top_frame, text="Inference", command=self.run_segmentation_get_mask)
+        self.inference_button.pack(side=tk.LEFT, padx=(5, 0)) # <<< 추가
         # 스크롤 만들어 주는 부분
         self.visible_scroll_frame1 = ScrollableFrame(check_container_task)
         self.visible_scroll_frame1.pack(fill=tk.BOTH, expand=True)
         # 스크롤 안에 roi_names채워넣는 부분
-        self._populate_segmen_rois(self.task_names)
+        self._populate_segmen_rois(self.organ_names)
 
         
         # visible roi부분
@@ -266,7 +278,7 @@ class MaskEditor:
         # 검색창에 입력된거 소문자로 바꾸고 query에 저장
         query = self.visible_search_entry1.get().lower()
         # 문자 포함된거 가지고 roi중에서 필터링후 새로운 filtered_names리스트 만들기
-        filtered_names = [name for name in self.task_names if query in name.lower()]
+        filtered_names = [name for name in self.organ_names if query in name.lower()]
         self._populate_segmen_rois(filtered_names)
 
     def _filter_visible_rois(self, event=None):
@@ -310,36 +322,120 @@ class MaskEditor:
         self._update_plot()
 
     def _on_check_changed_seg(self):
-        # 버튼 체크하면 그릴 roi업데이트 하고 다시화면 랜더링
-        self.segmented = {name for name, var in self.segment_check_vars.items() if var.get()}
-        for name in self.segmented:
-            if self.isSemented[name] == False:
-                print(f"{name} task segmentation진행중 ...")
-                temp_path = self.segmentation('dicom', self.dicom_folder, name)
-                start_time = time.time()
-                new_mask = self.get_mask_From_rtstruct(temp_path)
-                if new_mask is None:
-                    return
-                end_time = time.time()
-                print(f"rtstruct loading time = {end_time-start_time}")
-                self.isSemented[name] == True
-                if new_mask is not None:
-                    print("mask가 존재합니다")
-                    self.masks_dict.update(new_mask) # 기존 마스크딕셔너리에 새로운 마스크들 추가
-                    self.segmented_class_names.extend(list(self.masks_dict.keys())) # class name 최신화
+        if self.is_processing:
+            print("다른함수행중..")
+            return
 
-                    self._populate_editing_rois_list(self.segmented_class_names)
-                    self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
-                    self.colors = plt.cm.get_cmap('gist_rainbow', len(self.segmented_class_names))
-                    self.roi_colors = {name: [int(c*255) for c in self.colors(i)[:3]] for i, name in enumerate(self.segmented_class_names)}
+        # 작업 시작을 알리는 플래그를 세움
+        self.is_processing = True
 
-        for widget in self.visible_scroll_frame.scrollable_frame.winfo_children():
-            # 이전에 랜더링된 목록 지우기
-            widget.destroy()
-        for name in self.segmented_class_names:
-            # 보여줄 목록 가져와서 기존 true/false랑 연결지어서 pack해서 보여주기
-            cb = ttk.Checkbutton(self.visible_scroll_frame.scrollable_frame, text=name, variable=self.check_vars[name], command=self._on_check_changed)
-            cb.pack(anchor='w', padx=5)
+        try:
+            # 버튼 체크하면 그릴 roi업데이트 하고 다시화면 랜더링
+            self.checked = {name for name, var in self.segment_check_vars.items() if var.get()} # 체크된거
+            self.notchecked = {name for name, var in self.segment_check_vars.items() if not var.get()} # 체크안된거
+
+            # organs에서 한번 선택해서 분할한 장기 체크박스한번더누르면 해제됨. 그리고 다시 분할도 됨  -> 이거 계속 true로 가져가게 하기
+
+            # segmented = 이미분할된거
+            for name in self.checked:
+                print(f"checked list : {self.checked}")
+                #체크됬는데 분할안했고 todosegment에 없으면 추가
+                if self.isSemented[name] == False:
+                    if name not in self.todosegment:
+                        self.todosegment.append(name)
+                # 체크 안됬는데 분할 한거
+                elif self.isSemented[name] == True:
+                    if name in self.todosegment:
+                        self.todosegment.remove(name)
+
+            for name in self.notchecked:
+                #체크안됬는데 segmentation된거고 
+                # todosegment에 있으면 그거 삭제 그리고 해당 체크바 true로 변환
+                if self.isSemented[name] == True:
+                    if name in self.todosegment:
+                        self.todosegment.remove(name)
+                    self.segment_check_vars[name] = tk.BooleanVar(value=True)
+                    print("이미 분할된 장기입니다")
+                    #체크 안됬는데 segmentation안된거 근데 todosegmentation에 있으면 삭제
+                elif name in self.todosegment:
+                    self.todosegment.remove(name)
+            self._populate_segmen_rois(self.organ_names)
+            print(f"todo segment : {self.todosegment}")
+        finally:
+            # --- 잠금 해제 ---
+            # 모든 작업이 끝나면 플래그를 내려서 다른 함수가 실행될 수 있도록 함
+            self.is_processing = False
+
+
+    def run_segmentation_get_mask(self):
+        # segmentation loading UI
+        loading_window = tk.Toplevel(self.root)
+        loading_window.title("Processing")
+        # 창 크기 및 위치 설정 (화면 중앙에 오도록)
+        win_width = 200
+        win_height = 50
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (win_width // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (win_height // 2)
+        loading_window.geometry(f'{win_width}x{win_height}+{x}+{y}')
+        ttk.Label(loading_window, text="처리 중입니다...").pack(pady=15)
+
+        loading_window.transient(self.root) # 메인 창 위에 항상 있도록 설정
+        loading_window.grab_set()           # 모든 이벤트를 이 창으로 집중시켜 다른 상호작용을 막음
+        self.root.update_idletasks()        # 위 변경사항을 즉시 적용
+
+        print(f"segmentation진행중 ...")
+        try:
+            temp_path = self.segmentation('dicom', self.dicom_folder, self.todosegment) # todosegment = 현재 분할할 장기이름들
+            start_time = time.time()
+            new_mask = self.get_mask_From_rtstruct(temp_path)
+            # 아예 분할 안됬을때
+            if new_mask is None:
+                print("분할된것이 없습니다")
+                return
+            # 전부 분할했을떄
+            elif len(new_mask) == len(self.todosegment):
+                for name in self.todosegment:
+                    self.isSemented[name] = True
+                print("전부 분할 완료")
+            # 일정부분만 분할했을떄
+            else:
+                for name in self.todosegment:
+                    if name not in new_mask:
+                        print(f"{name}은 분할되지 않았습니다") 
+                    else:
+                        print(f"is segmented에 추가 {name}")
+                        self.isSemented[name] = True
+                        # self.segmented_class_names.append(name)
+
+            self.todosegment.clear()
+
+            end_time = time.time()
+            print(f"rtstruct loading time = {end_time-start_time}")
+
+            if new_mask is not None:
+                self.masks_dict.update(new_mask) # 기존 마스크딕셔너리에 새로운 마스크들 추가
+                self.segmented_class_names.extend(list(self.masks_dict.keys())) # class name 최신화
+
+                self._populate_editing_rois_list(self.segmented_class_names)
+                self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
+                self.colors = plt.cm.get_cmap('gist_rainbow', len(self.segmented_class_names))
+                self.roi_colors = {name: [int(c*255) for c in self.colors(i)[:3]] for i, name in enumerate(self.segmented_class_names)}
+
+            for widget in self.visible_scroll_frame.scrollable_frame.winfo_children():
+                # 이전에 랜더링된 목록 지우기
+                widget.destroy()
+            for name in self.segmented_class_names:
+                # 보여줄 목록 가져와서 기존 true/false랑 연결지어서 pack해서 보여주기
+                cb = ttk.Checkbutton(self.visible_scroll_frame.scrollable_frame, text=name, variable=self.check_vars[name], command=self._on_check_changed)
+                cb.pack(anchor='w', padx=5)
+
+        finally:
+            # 3. 로딩 창 제거 및 메인 창 활성화
+            # UI 업데이트는 모든 로직이 끝난 후 여기서 수행
+            self._populate_segmen_rois(self.organ_names)
+            loading_window.grab_release()
+            loading_window.destroy()
+
 
     def _on_d_press(self, event):
         self.d_key_pressed = True
@@ -566,7 +662,7 @@ class MaskEditor:
         self.ct_volume_display = self._normalize_to_uint8(hu_image, self.center_val ,self.width_val)
 
 
-    def segmentation(self, filetype, input_path, task):
+    def segmentation(self, filetype, input_path, roi_organs):
         """
         DICOM 파일을 입력받아 TotalSegmentator를 이용해 RTSTRUCT를 생성
 
@@ -585,7 +681,7 @@ class MaskEditor:
                 print(f"segmentation 결과 저장할 경로 : {output_path}")
 
                 # TotalSegmentator 실행
-                totalsegmentator(input_path, output_path, task=task, output_type=filetype)
+                totalsegmentator(input_path, output_path, roi_subset=roi_organs, output_type=filetype)
 
                 # 생성된 RTSTRUCT 파일 경로 반환
                 rt_path = os.path.join(output_path,'segmentations.dcm')
