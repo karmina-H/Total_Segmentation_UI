@@ -12,6 +12,30 @@ from rt_utils.rtstruct import RTStruct
 from tkinterdnd2 import DND_FILES, TkinterDnD 
 import time
 from rt_utils import RTStructBuilder
+import torch
+
+import monai
+from monai.config import print_config
+
+from monai.apps.deepedit.transforms import (
+    AddGuidanceSignalDeepEditd,
+    AddGuidanceFromPointsDeepEditd,
+    ResizeGuidanceMultipleLabelDeepEditd,
+)
+from monai.transforms import (
+    Activationsd,
+    AsDiscreted,
+    EnsureChannelFirstd,
+    EnsureTyped,
+    LoadImaged,
+    Orientationd,
+    Resized,
+    ScaleIntensityRanged,
+    SqueezeDimd,
+    ToNumpyd,
+    ToTensord,
+)
+from monai.networks.nets import DynUNet
 
 '''
 좌클릭 -> 추가 mask생성
@@ -70,7 +94,7 @@ class MaskEditor:
         self.drawing = False
         self.erasing = False # 지우기 상태 변수 추가
         self.d_key_pressed = False # 'd' 키 상태 변수 추가
-        self.temp_line_mask = None
+        self.temp_line_mask = np.zeros(10, dtype=bool)
 
         # --- 줌 & 팬 상태 변수 ---
         self.zoom_level = 1.0
@@ -209,6 +233,8 @@ class MaskEditor:
         # 가로로 긴 'Inference' 버튼을 check_container_task에 직접 추가합니다.
         self.inference_button_long = ttk.Button(check_container_task, text="Inference", command=self.run_segmentation_get_mask) # command는 실제 실행할 함수로 연결하세요.
         self.inference_button_long.pack(fill=tk.X, padx=5, pady=(0, 5)) # 위아래 여백(padding) 추가
+        self.inference_button_long = ttk.Button(check_container_task, text="Load Mask", command=self.load_mask) # command는 실제 실행할 함수로 연결하세요.
+        self.inference_button_long.pack(fill=tk.X, padx=5, pady=(0, 5)) # 위아래 여백(padding) 추가
 
         # 스크롤 만들어 주는 부분
         self.visible_scroll_frame1 = ScrollableFrame(check_container_task)
@@ -314,7 +340,7 @@ class MaskEditor:
                 # 수정된 마스크를 ROI로 추가
                 new_rtstruct.add_roi(
                     mask=filled_mask,
-                    name=f"{name}_modified"
+                    name=f"{name}"
                 )
             
             new_rtstruct.save(new_rt_filename)
@@ -410,6 +436,67 @@ class MaskEditor:
         # 버튼 체크하면 그릴 roi업데이트 하고 다시화면 랜더링
         self.active_rois = {name for name, var in self.check_vars.items() if var.get()}
         self._update_plot()
+    
+    def load_mask(self):
+        if self.dicom_folder is None:
+            print("선택된 dicom파일이 없습니다.")
+            return
+        file_path = filedialog.askopenfilename(
+        title="마스크 DICOM 파일 선택",
+        filetypes=[("DICOM 파일", "*.dcm"), ("모든 파일", "*.*")]
+        )
+        # 사용자가 파일을 선택했는지 확인
+        if not file_path:
+            # 파일 선택을 취소한 경우
+            print("파일 선택을 취소했습니다.")
+            return None # 아무 경로도 반환하지 않음
+        # 1. 파일 경로 선택 GUI 실행
+        root = tk.Tk()
+        root.withdraw()  # 빈 Tkinter 창 숨기기
+
+        is_match = self.verify_dicom_series_match(file_path, self.dicom_folder)
+        if not is_match:
+            messagebox.showerror("오류", f"해당 마스크파일와 디콤파일이 맞지 않습니다:\n{e}")
+            return None
+        try:
+            self.masks_dict = {}
+            self.colors = None
+            self.roi_colors = {}
+            self.check_vars = {}
+            self.segmented_class_names = []
+            self.isSemented = {}
+
+            self.masks_dict = self.get_mask_From_rtstruct(file_path)
+            if self.masks_dict:
+                for name in self.masks_dict:
+                    self.isSemented[name] = True
+                    self.segmented_class_names.append(name)
+                    #여기다가 마스크오버레이하고 왼쪽 UI도 최신화 하는 코드 
+                    #self.masks_dict.update(new_mask) # 기존 마스크딕셔너리에 새로운 마스크들 추가
+
+                    self._populate_editing_rois_list(self.segmented_class_names)
+                    self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
+                    self.colors = plt.cm.get_cmap('gist_rainbow', len(self.segmented_class_names))
+                    self.roi_colors = {name: [int(c*255) for c in self.colors(i)[:3]] for i, name in enumerate(self.segmented_class_names)}
+
+                    for widget in self.visible_scroll_frame.scrollable_frame.winfo_children():
+                        # 이전에 랜더링된 목록 지우기
+                        widget.destroy()
+                    for name in self.segmented_class_names:
+                        # 보여줄 목록 가져와서 기존 true/false랑 연결지어서 pack해서 보여주기
+                        cb = ttk.Checkbutton(self.visible_scroll_frame.scrollable_frame, text=name, variable=self.check_vars[name], command=self._on_check_changed)
+                        cb.pack(anchor='w', padx=5)
+                    print("로드완료")
+
+                self._update_plot()
+
+            else:
+                print("분할되어있는 마스크가 없습니다")
+
+        except Exception as e:
+            messagebox.showerror("오류", f"파일 처리 중 오류가 발생했습니다:\n{e}")
+            print(f"오류: {e}")
+            return
 
     def run_segmentation_get_mask(self):
         if not self.todosegment :
@@ -751,3 +838,46 @@ class MaskEditor:
         except Exception as e:
             print(f"분할 중 오류 발생: {e}")
             return None 
+
+    def verify_dicom_series_match(self, rt_struct_path, dicom_folder_path):
+        """
+        RT-STRUCT 파일과 DICOM 시리즈 폴더의 Series Instance UID가 일치하는지 확인합니다.
+        
+        :param rt_struct_path: RT-STRUCT 파일의 경로
+        :param dicom_folder_path: DICOM 이미지 시리즈 폴더의 경로
+        :return: UID가 일치하면 True, 그렇지 않으면 False를 반환합니다.
+        """
+        try:
+            # 1. RT-STRUCT 파일에서 참조하는 Series UID 추출
+            rt_dataset = pydicom.dcmread(rt_struct_path)
+            # RT-STRUCT 파일은 내부에 어떤 스터디/시리즈를 참조하는지 정보를 가짐
+            rt_series_uid = rt_dataset.ReferencedFrameOfReferenceSequence[0] \
+                                    .RTReferencedStudySequence[0] \
+                                    .RTReferencedSeriesSequence[0] \
+                                    .SeriesInstanceUID
+            
+            # 2. DICOM 폴더의 이미지 파일에서 Series UID 추출
+            # 폴더 내 첫 번째 .dcm 파일을 읽어 시리즈 전체의 UID를 확인 (시리즈 내 모든 파일은 UID가 동일)
+            dicom_files = [f for f in os.listdir(dicom_folder_path) if f.endswith('.dcm')]
+            if not dicom_files:
+                messagebox.showerror("오류", f"폴더에 DICOM 파일이 없습니다:\n{dicom_folder_path}")
+                return False
+                
+            first_image_path = os.path.join(dicom_folder_path, dicom_files[0])
+            image_dataset = pydicom.dcmread(first_image_path)
+            image_series_uid = image_dataset.SeriesInstanceUID
+
+            # 3. 두 UID 비교
+            if rt_series_uid == image_series_uid:
+                print("UID 일치 확인: 올바른 DICOM 시리즈입니다.")
+                return True
+            else:
+                print("UID 불일치!")
+                print(f"  - RT-STRUCT가 참조하는 UID: {rt_series_uid}")
+                print(f"  - DICOM 폴더의 UID: {image_series_uid}")
+                return False
+
+        except Exception as e:
+            print(f"UID 확인 중 오류 발생: {e}")
+            messagebox.showerror("오류", "DICOM 파일의 UID를 확인하는 중 오류가 발생했습니다.\n파일이 유효한지 확인해주세요.")
+            return False

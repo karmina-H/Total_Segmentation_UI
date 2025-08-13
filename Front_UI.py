@@ -1,9 +1,17 @@
 from PIL import Image, ImageTk
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk,filedialog,messagebox  
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.ndimage import binary_fill_holes
+import os
+from totalsegmentator.python_api import totalsegmentator
+import glob
+import pydicom
+from rt_utils.rtstruct import RTStruct
+from tkinterdnd2 import DND_FILES, TkinterDnD 
+import time
+from rt_utils import RTStructBuilder
 
 '''
 좌클릭 -> 추가 mask생성
@@ -27,43 +35,42 @@ class ScrollableFrame(ttk.Frame):
                 scrollregion=canvas.bbox("all")
             )
         )
-
         canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
 
 class MaskEditor:
-    """
-
-    Tkinter를 통해 인터랙티브하게 마스크를 편집하는 클래스.
-
-    """
-    def __init__(self, ct_volume, masks_dict, central_val, width_val, slope, intercept):
+    def __init__(self, organ_names):
         # hu변환할때 필요한 변수들
-        self.central_val = central_val
-        self.width_val = width_val
-        # ct 사진변수(row)
-        self.ct_volume = ct_volume
-        # hu값으로 변환하고 값 정규화
-        hu_image = ct_volume * slope + intercept
-        self.ct_volume_display = self._normalize_to_uint8(hu_image, central_val ,width_val)
+        self.center_val = None
+        self.width_val = None
+        self.slope = None
+        self.intercept = None
 
-        # roi각각의 마스크를 저장하는 딕셔너리
-        self.masks_dict = masks_dict.copy()
-        # roi 이름 저장한 리스트 
-        self.roi_names = sorted(list(masks_dict.keys()))
+        self.organ_names = organ_names # 모든장기이름 리스트 수정 x
 
-        # --- 상태 변수 ---
-        self.current_slice_idx = ct_volume.shape[2] // 2
+        self.ct_volume = None # dicom의 넘파이배열버전(x,y,z)
+        self.dicom_folder = None # 원본 dicom폴더 경로
+        self.d2_slices = None # dicom의 넘파이배열버전(x,y,z) -> dicom_to_np이 함수에서만 사용됨
+
+        self.todosegment = [] # 지금 추론할 장기 이름들
+
+        self.masks_dict = {} # 장기별로 mask를 boolean형태로(3차원, x,y,z)
+        self.isSemented = {task_name: False for task_name in self.organ_names} # 해당 organ이 이미 분할한건지 boolean
+        self.segmented_class_names = [] # 분할완료된 organ이름들
+
+        self.selected_organ_name = None # 콤보박스로 현재 선택된 장기이름
+
+        # # --- 상태 변수 ---
+        self.current_slice_idx = None
         self.brush_size = 1
         self.drawing = False
         self.erasing = False # 지우기 상태 변수 추가
         self.d_key_pressed = False # 'd' 키 상태 변수 추가
-        self.temp_line_mask = np.zeros(ct_volume.shape[:2], dtype=bool) # 사용자가 마우스 좌클릭을 떼기 전까지 그리는 선을 임시로 저장하는 2D numpy 배열
+        self.temp_line_mask = None
 
         # --- 줌 & 팬 상태 변수 ---
         self.zoom_level = 1.0
@@ -72,29 +79,89 @@ class MaskEditor:
         self.canvas_img_x = 0
         self.canvas_img_y = 0
 
-
         # --- 색상 설정 ---
-        # roi_names 개수만큼 균등간격으로 색상 추출
-        self.colors = plt.cm.get_cmap('gist_rainbow', len(self.roi_names))
-        # 각 roi이름에 색상할당하고 딕셔너리로 저장
-        self.roi_colors = {name: [int(c*255) for c in self.colors(i)[:3]] for i, name in enumerate(self.roi_names)}
-
-        # --- Tkinter UI 설정 ---
-        self.root = tk.Tk()
-        self.root.title("Mask Editor (Tkinter)")
-        self.root.geometry("1000x800") # 초기 창 크기
+        self.colors = None # 장기별 mask색상
+        self.root = TkinterDnD.Tk()
+        self.root.title("Mask Editor (Tkinter) - Drag & Drop a DICOM folder")
+        self.root.geometry("1000x800")
 
         # --- 상태 변수 (Tkinter용) ---
-        self.editing_roi_name = tk.StringVar(value=self.roi_names[0])  # Editing ROI 의 string 초기값 할당
-        self.check_vars = {name: tk.BooleanVar(value=(name == self.roi_names[0])) for name in self.roi_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
-        self.active_rois = {self.roi_names[0]} # 화면에 표시되고 있는 roi 리스트 저장하는 set
-
-        print(f"active_rois: {self.active_rois}")
+        self.editing_roi_name = tk.StringVar(value=False)  # Editing ROI 의 string 초기값 할당
+        self.segment_check_vars = {} # segmentation
+        self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
+        self.active_rois = {} # 화면에 표시되고 있는 roi 리스트 저장하는 set
+        self.segmented = {} # segmentation된 task 저장하는 seg
 
         # --- UI 레이아웃 생성 ---
         self._setup_ui()
-        self._update_plot()
+
+        # --- 드래그 앤 드롭 이벤트 바인딩 ---
+        self.root.drop_target_register(DND_FILES)
+        self.root.dnd_bind('<<Drop>>', self._on_drop)
+
+
         self.root.mainloop()
+        self._update_plot()
+
+
+    def _on_drop(self, event):
+        """폴더를 드래그 앤 드롭했을 때 호출되는 이벤트 핸들러"""
+        folder_path = event.data.strip('{}')
+        print(f"Folder dropped: {folder_path}")
+
+        # 폴더 유효성 확인
+        # if not os.path.isdir(folder_path):
+        #     self.status_label.config(text=f"Error: Not a valid folder: {folder_path}")
+        #     return
+
+        self.dicom_folder = folder_path
+        self.status_label.config(text=f"Loading DICOM files from: {self.dicom_folder}")
+        self.root.title(f"Mask Editor - {self.dicom_folder}")
+
+        try:
+            print("Loading DICOM data...") 
+            self.dicom_to_np(self.dicom_folder) # dicom파일을 넘파이배열로 변환하고 정규화
+            print("DICOM data loaded.")
+        except Exception as e:
+            self.status_label.config(text=f"Failed to load DICOM data: {e}")
+            return
+            
+        self.masks_dict = {}
+        self.isSemented = {task_name: False for task_name in self.organ_names}
+        self.segmented_class_names = [] # 초기화
+        self.selected_organ_name = None
+        self.todosegment.clear() # 지금 추론할 장기 이름들
+
+        # --- 상태 변수 ---
+        self.current_slice_idx = self.ct_volume.shape[2] // 2
+        self.brush_size = 1
+        self.drawing = False
+        self.erasing = False
+        self.d_key_pressed = False
+        self.temp_line_mask = np.zeros(self.ct_volume.shape[:2], dtype=bool)
+
+        # --- 줌 & 팬 상태 변수 ---
+        self.zoom_level = 1.0
+        self.pan_start_x, self.pan_start_y = 0, 0
+        self.canvas_img_x, self.canvas_img_y = 0, 0
+
+        # --- 색상 및 UI 변수 재설정 ---
+        self.editing_roi_name = tk.StringVar(value=False)
+        self.segment_check_vars = {}
+        self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names}
+        self.active_rois = {}
+        self.segmented = {}
+
+
+
+        # --- UI 업데이트 ---
+        self._populate_segmen_rois()
+        self._populate_visible_rois_list(self.segmented_class_names)
+        self._populate_editing_rois_list(self.segmented_class_names)
+
+        self._update_plot()
+        self.status_label.config(text="DICOM data loaded successfully. Ready to edit.")
+
 
     def _normalize_to_uint8(self, data, central_val ,width_val):
         window_center = central_val
@@ -123,49 +190,64 @@ class MaskEditor:
         right_frame = ttk.Frame(main_frame)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True) # 남은 공간 모두차지 
 
-         # segmetation task선택부분
-        check_container1 = ttk.LabelFrame(left_frame, text="task")
-        check_container1.grid(row=0, column=0, pady=5, sticky="nsew")
-        #check_container1.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        ## 'Visible ROIs' 그룹 안에 검색창(Entry)을 만들어주는 부분
-        self.visible_search_entry1 = ttk.Entry(check_container1)
-        self.visible_search_entry1.pack(fill=tk.X, padx=5, pady=(5,0))
-        self.visible_search_entry1.bind("<KeyRelease>", self._filter_visible_rois) # 키보드 클릭시 마다  _filter_visible_rois함수로 필터링 수행
+        # segmetation task선택부분
+        check_container_task = ttk.LabelFrame(left_frame, text="organs")
+        check_container_task.grid(row=0, column=0, pady=5, sticky="nsew")
+
+        # 검색창과 버튼을 가로로 담을 프레임 생성 <<< 추가
+        top_frame = ttk.Frame(check_container_task)
+        top_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.organ_combobox = ttk.Combobox(top_frame, values=self.organ_names, state="readonly")
+        self.organ_combobox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        # 콤보박스에서 항목을 선택했을 때 필터링 함수를 호출합니다.
+        self.organ_combobox.bind("<<ComboboxSelected>>", self.on_select_comboBox)
+
+        # 'add' 버튼을 top_frame에 추가 <<< 추가
+        self.inference_button = ttk.Button(top_frame, text="add", command=self.add_todo_segmentation_organ)
+        self.inference_button.pack(side=tk.LEFT, padx=(5, 0)) # <<< 추가
+        # 가로로 긴 'Inference' 버튼을 check_container_task에 직접 추가합니다.
+        self.inference_button_long = ttk.Button(check_container_task, text="Inference", command=self.run_segmentation_get_mask) # command는 실제 실행할 함수로 연결하세요.
+        self.inference_button_long.pack(fill=tk.X, padx=5, pady=(0, 5)) # 위아래 여백(padding) 추가
+
         # 스크롤 만들어 주는 부분
-        self.visible_scroll_frame1 = ScrollableFrame(check_container1)
+        self.visible_scroll_frame1 = ScrollableFrame(check_container_task)
         self.visible_scroll_frame1.pack(fill=tk.BOTH, expand=True)
         # 스크롤 안에 roi_names채워넣는 부분
-        self._populate_visible_rois_list2(self.roi_names)
+        self._populate_segmen_rois()
 
         
         # visible roi부분
-        check_container = ttk.LabelFrame(left_frame, text="Visible ROIs")
-        check_container.grid(row=1, column=0, pady=5, sticky="nsew")
-        #check_container.pack(fill=tk.BOTH, expand=True, pady=5)
+        check_container_visible = ttk.LabelFrame(left_frame, text="Visible ROIs")
+        check_container_visible.grid(row=1, column=0, pady=5, sticky="nsew")
         
         ## 'Visible ROIs' 그룹 안에 검색창(Entry)을 만들어주는 부분
-        self.visible_search_entry = ttk.Entry(check_container)
+        self.visible_search_entry = ttk.Entry(check_container_visible)
         self.visible_search_entry.pack(fill=tk.X, padx=5, pady=(5,0))
         self.visible_search_entry.bind("<KeyRelease>", self._filter_visible_rois) # 키보드 클릭시 마다  _filter_visible_rois함수로 필터링 수행
+
         # 스크롤 만들어 주는 부분
-        self.visible_scroll_frame = ScrollableFrame(check_container)
+        self.visible_scroll_frame = ScrollableFrame(check_container_visible)
         self.visible_scroll_frame.pack(fill=tk.BOTH, expand=True)
         # 스크롤 안에 roi_names채워넣는 부분
-        self._populate_visible_rois_list(self.roi_names)
+        self._populate_visible_rois_list(self.segmented_class_names)
 
         # editing roi 부분
         radio_container = ttk.LabelFrame(left_frame, text="Editing ROI")
         radio_container.grid(row=2, column=0, pady=5, sticky="nsew")
-        #radio_container.pack(fill=tk.BOTH, expand=True, pady=5)
 
         self.editing_search_entry = ttk.Entry(radio_container)
         self.editing_search_entry.pack(fill=tk.X, padx=5, pady=(5,0))
         self.editing_search_entry.bind("<KeyRelease>", self._filter_editing_rois)
 
+        # 가로로 긴 'Mask_sace' 버튼을 추가합니다.
+        self.inference_button_long = ttk.Button(radio_container, text="Mask_Save", command=self.save_mask) # command는 실제 실행할 함수로 연결하세요.
+        self.inference_button_long.pack(fill=tk.X, padx=5, pady=(0, 5)) # 위아래 여백(padding) 추가
+        
+
         self.editing_scroll_frame = ScrollableFrame(radio_container)
         self.editing_scroll_frame.pack(fill=tk.BOTH, expand=True)
-        self._populate_editing_rois_list(self.roi_names)
+        self._populate_editing_rois_list(self.segmented_class_names)
 
         # 화면 오른쪽에 그릴 빈 canvas만들어줌, 배경은 검은색으로
         self.canvas = tk.Canvas(right_frame, bg='black')
@@ -193,12 +275,106 @@ class MaskEditor:
 
         self.canvas.bind("<ButtonPress-3>", self._on_pan_start)# 마우스 오른쪽버튼 누를 시
         self.canvas.bind("<B3-Motion>", self._on_pan_move) #마우스 오른쪽버튼 누르고 움직일떄
+    
+    def save_mask(self):
+        Result_mask = self.get_modified_masks()
+        # 에디터 종료 후 수정된 마스크 저장하는 부분
 
-    def _filter_visible_rois(self, event=None):
+        if Result_mask:
+            output_dir = 'output'  
+            os.makedirs(output_dir, exist_ok=True)
+
+            # base_name = "modified_RS"
+            # extension = ".dcm"
+            # i = 1
+            # while True:
+            #     new_rt_filename = os.path.join(output_dir, f"{base_name}{i}{extension}")
+            #     if not os.path.exists(new_rt_filename):
+            #         break  # 파일명이 존재하지 않으면 루프를 빠져나오기
+            #     i += 1
+
+            new_rt_filename = filedialog.asksaveasfilename(
+            title="마스크 파일 저장",
+            initialdir=output_dir,  # 초기 디렉토리
+            initialfile="modified_mask.dcm", # 기본 파일명 제안
+            defaultextension=".dcm",
+            filetypes=[("DICOM files", "*.dcm"), ("All files", "*.*")]
+            )
+            if not new_rt_filename:
+                print("저장을 취소했습니다.")
+                return  # 함수 실행 종료
+
+            
+            print(f"{new_rt_filename} 파일 생성중 ...")
+            new_rtstruct = RTStructBuilder.create_new(self.dicom_folder)
+            
+            for name, mask in Result_mask.items():
+                filled_mask = binary_fill_holes(mask)
+                
+                # 수정된 마스크를 ROI로 추가
+                new_rtstruct.add_roi(
+                    mask=filled_mask,
+                    name=f"{name}_modified"
+                )
+            
+            new_rtstruct.save(new_rt_filename)
+            print(f"저장 완료! 새로운 파일: {new_rt_filename}")
+            messagebox.showwarning(f"정보", "수정된 마스크 '{new_rt_filename}' 가 저장되었습니다.")
+
+        else:
+            messagebox.showwarning("알림", "현재 분할된 마스크가 없습니다.")
+            print("저장하지 않고 종료합니다.")
+
+
+
+    def on_select_comboBox(self,event=None):
+        # combobox 선택한거 가져오기 ->
+        self.selected_organ_name = self.organ_combobox.get().lower()
+
+    def _populate_segmen_rois(self): # 추론할 organ 보여주는 함수(첫번째 box UI관련 함수)
+        # 이전에 렌더링된 목록 지우기
+        for widget in self.visible_scroll_frame1.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        # 보여줄 목록을 가져와서 한 줄씩 생성
+        for name in self.todosegment:
+            # 각 항목(라벨 + 버튼)을 담을 프레임을 생성
+            row_frame = ttk.Frame(self.visible_scroll_frame1.scrollable_frame)
+            row_frame.pack(fill='x', padx=5, pady=2) # 프레임이 가로로 꽉 차게 설정
+
+            # 텍스트 라벨을 프레임 왼쪽에 추가
+            label = ttk.Label(row_frame, text=name)
+            label.pack(side='left', anchor='w')
+
+            # 'X' 버튼을 프레임 오른쪽에 추가
+            # lambda를 사용하여 어떤 항목의 버튼이 클릭되었는지 이름(name)을 함수에 전달
+            delete_button = ttk.Button(row_frame, text="X",
+                                    command=lambda n=name: self.on_delete_item(n))
+            delete_button.pack(side='right')
+
+    def on_delete_item(self, item_name):
+        self.todosegment.remove(item_name)
+        print("삭제")
+        self._populate_segmen_rois()
+
+
+    def add_todo_segmentation_organ(self):
+        print("pushed add!")
+        # 분할이 안된거면서 기존 todosegment에 없을때
+        if self.isSemented[self.selected_organ_name] == False:
+            if not self.selected_organ_name in self.todosegment:
+                print(f"name:{self.selected_organ_name} is added")
+                self.todosegment.append(self.selected_organ_name)
+        elif self.isSemented[self.selected_organ_name] == True:
+            print(f"{self.selected_organ_name}is already segmented!")
+        self._populate_segmen_rois()
+        print(f"todosegment : {self.todosegment}")
+
+    def _filter_visible_rois(self, event=None): # 두번쨰 UI FILTERING함수
         # 검색창에 입력된거 소문자로 바꾸고 query에 저장
         query = self.visible_search_entry.get().lower()
         # 문자 포함된거 가지고 roi중에서 필터링후 새로운 filtered_names리스트 만들기
-        filtered_names = [name for name in self.roi_names if query in name.lower()]
+        filtered_names = [name for name in self.segmented_class_names if query in name.lower()]
         self._populate_visible_rois_list(filtered_names)
 
     def _populate_visible_rois_list(self, roi_names_to_display): # filter된거 가지고 ui새로고침 하는 함수
@@ -209,21 +385,12 @@ class MaskEditor:
             # 보여줄 목록 가져와서 기존 true/false랑 연결지어서 pack해서 보여주기
             cb = ttk.Checkbutton(self.visible_scroll_frame.scrollable_frame, text=name, variable=self.check_vars[name], command=self._on_check_changed)
             cb.pack(anchor='w', padx=5)
-
-    def _populate_visible_rois_list2(self, roi_names_to_display): # filter된거 가지고 ui새로고침 하는 함수
-        for widget in self.visible_scroll_frame1.scrollable_frame.winfo_children():
-            # 이전에 랜더링된 목록 지우기
-            widget.destroy()
-        for name in roi_names_to_display:
-            # 보여줄 목록 가져와서 기존 true/false랑 연결지어서 pack해서 보여주기
-            cb = ttk.Checkbutton(self.visible_scroll_frame1.scrollable_frame, text=name, variable=self.check_vars[name], command=self._on_check_changed)
-            cb.pack(anchor='w', padx=5)
-
+            
 
     # visible과 동일하게 구현, 근데 참조하는게 달라서 다른 함수로 구현
     def _filter_editing_rois(self, event=None): 
         query = self.editing_search_entry.get().lower()
-        filtered_names = [name for name in self.roi_names if query in name.lower()]
+        filtered_names = [name for name in self.segmented_class_names if query in name.lower()]
         self._populate_editing_rois_list(filtered_names)
 
     def _populate_editing_rois_list(self, roi_names_to_display):
@@ -233,6 +400,7 @@ class MaskEditor:
             rb = ttk.Radiobutton(self.editing_scroll_frame.scrollable_frame, text=name, variable=self.editing_roi_name, value=name, command=self._update_plot)
             rb.pack(anchor='w', padx=5)
             
+
     def _canvas_to_image_coords(self, canvas_x, canvas_y): # 화면좌표 -> 원본이미지 픽셀좌표로( 이동이나 확대 고려)
         img_x = (canvas_x - self.canvas_img_x) / self.zoom_level
         img_y = (canvas_y - self.canvas_img_y) / self.zoom_level
@@ -242,7 +410,81 @@ class MaskEditor:
         # 버튼 체크하면 그릴 roi업데이트 하고 다시화면 랜더링
         self.active_rois = {name for name, var in self.check_vars.items() if var.get()}
         self._update_plot()
-        
+
+    def run_segmentation_get_mask(self):
+        if not self.todosegment :
+            messagebox.showwarning("알림","선택된 장기가 없습니다")
+            print("선택된 장기가 없습니다")
+            return None
+        # segmentation loading UI
+        loading_window = tk.Toplevel(self.root)
+        loading_window.title("Processing")
+        # 창 크기 및 위치 설정 (화면 중앙에 오도록)
+        win_width = 200
+        win_height = 50
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (win_width // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (win_height // 2)
+        loading_window.geometry(f'{win_width}x{win_height}+{x}+{y}')
+        ttk.Label(loading_window, text="처리 중입니다...").pack(pady=15)
+
+        loading_window.transient(self.root) # 메인 창 위에 항상 있도록 설정
+        loading_window.grab_set()           # 모든 이벤트를 이 창으로 집중시켜 다른 상호작용을 막음
+        self.root.update_idletasks()        # 위 변경사항을 즉시 적용
+
+        print(f"segmentation진행중 ...")
+        try:
+            temp_path = self.segmentation('dicom', self.dicom_folder, self.todosegment) # todosegment = 현재 분할할 장기이름들
+            start_time = time.time()
+            new_mask = self.get_mask_From_rtstruct(temp_path)
+            # 아예 분할 안됬을때
+            if new_mask is None:
+                print("분할된것이 없습니다")
+                return
+            # 전부 분할했을떄
+            elif len(new_mask) == len(self.todosegment):
+                for name in self.todosegment:
+                    self.isSemented[name] = True
+                print("전부 분할 완료")
+            # 일정부분만 분할했을떄
+            else:
+                for name in self.todosegment:
+                    if name not in new_mask:
+                        print(f"{name}은 분할되지 않았습니다") 
+                    else:
+                        print(f"is segmented에 추가 {name}")
+                        self.isSemented[name] = True
+                        # self.segmented_class_names.append(name)
+
+            self.todosegment.clear()
+
+            end_time = time.time()
+            print(f"rtstruct loading time = {end_time-start_time}")
+
+            if new_mask is not None:
+                self.masks_dict.update(new_mask) # 기존 마스크딕셔너리에 새로운 마스크들 추가
+                self.segmented_class_names.extend(list(self.masks_dict.keys())) # class name 최신화
+
+                self._populate_editing_rois_list(self.segmented_class_names)
+                self.check_vars = {name: tk.BooleanVar(value=False) for name in self.segmented_class_names} # 체크박스의 선택/해제 상태와 연동되는 set변수
+                self.colors = plt.cm.get_cmap('gist_rainbow', len(self.segmented_class_names))
+                self.roi_colors = {name: [int(c*255) for c in self.colors(i)[:3]] for i, name in enumerate(self.segmented_class_names)}
+
+            for widget in self.visible_scroll_frame.scrollable_frame.winfo_children():
+                # 이전에 랜더링된 목록 지우기
+                widget.destroy()
+            for name in self.segmented_class_names:
+                # 보여줄 목록 가져와서 기존 true/false랑 연결지어서 pack해서 보여주기
+                cb = ttk.Checkbutton(self.visible_scroll_frame.scrollable_frame, text=name, variable=self.check_vars[name], command=self._on_check_changed)
+                cb.pack(anchor='w', padx=5)
+
+        finally:
+            # 3. 로딩 창 제거 및 메인 창 활성화
+            # UI 업데이트는 모든 로직이 끝난 후 여기서 수행
+            self._populate_segmen_rois()
+            loading_window.grab_release()
+            loading_window.destroy()
+
+
     def _on_d_press(self, event):
         self.d_key_pressed = True
 
@@ -377,15 +619,16 @@ class MaskEditor:
         display_img_base = np.stack([ct_slice] * 3, axis=-1) # overlay를 위해서 3채널로 바꿔줌
 
         for roi_name in self.active_rois:
-            # 체크해놓은 것들중, 이름과 색상을 가져오고
+            # # 체크해놓은 것들중, 이름과 색상을 가져오고
             mask = self.masks_dict[roi_name][:, :, self.current_slice_idx]
             color = self.roi_colors[roi_name]
             # 기존 ct에 오버레이
             display_img_base[mask] = (display_img_base[mask] * 0.5 + np.array(color) * 0.5).astype(np.uint8)
 
-        # drawing중이면 사용자가 그린 색을 노란색으로
+        # drawing중이면 사용자가 그린 색을 현재 editing중인 class 색상으로
         if self.drawing:
-            display_img_base[self.temp_line_mask] = [255, 255, 0]
+            display_img_base[self.temp_line_mask]= self.roi_colors[self.editing_roi_name.get()]
+            #display_img_base[self.temp_line_mask] = [255, 255, 0]
 
         # 최종 오버레이된 이미지를 넘파이배열로 변환하고
         self.pil_img = Image.fromarray(display_img_base)
@@ -413,3 +656,98 @@ class MaskEditor:
     
     def get_modified_masks(self):
         return self.masks_dict
+    
+    def get_mask_From_rtstruct(self, rtstruct_path):
+        # RTSTRUCT 로드 및 마스크 추출 (구버전 방식)
+        print("RTSTRUCT 파일을 로딩합니다...")
+        print(f"로딩중인 파일경로 : {rtstruct_path}")
+        try:
+            rtstruct_dicom = pydicom.dcmread(rtstruct_path)
+            
+            # 로드한 DICOM 슬라이스 목록과 RTSTRUCT를 RTStruct 객체에 전달
+            rtstruct = RTStruct(self.d2_slices, rtstruct_dicom)
+
+            roi_names = rtstruct.get_roi_names()
+            #print(f"발견된 ROI: {roi_names}")
+            
+            temp_masks_dict = {}
+            for name in roi_names:
+                # 마스크를 3D numpy 배열로 가져옴 (boolean)
+                mask_3d = rtstruct.get_roi_mask_by_name(name)
+                temp_masks_dict[name] = mask_3d
+            
+            return temp_masks_dict
+                
+        except Exception as e:
+            print(f"RTSTRUCT 로딩 중 오류 발생: {e}")
+            return
+
+    
+    def dicom_to_np(self, dicom_series_path):
+        print("원본 DICOM 시리즈를 로딩합니다...")
+        # 해당 폴더안에 있는 .dcm파일들 경로를 리스트로 반환
+        dicom_files = glob.glob(os.path.join(dicom_series_path, '*.dcm'))
+        if not dicom_files:
+            print(f"오류: '{dicom_series_path}' 폴더에 DICOM 파일이 없습니다.")
+            return
+        
+        #dicom파일 하나씩 읽고
+        self.d2_slices = [pydicom.dcmread(f) for f in dicom_files]
+        # z축 기준 정렬
+        self.d2_slices.sort(key=lambda x: float(x.ImagePositionPatient[2]))
+
+        # hu값변환시 사용할 변수들
+        self.center_val = self.d2_slices[0].WindowCenter
+        self.width_val = self.d2_slices[0].WindowWidth
+        self.slope = float(self.d2_slices[0].RescaleSlope)
+        self.intercept = float(self.d2_slices[0].RescaleIntercept)
+        
+        # 원본 3D 볼륨 생성 -> mask editor클래스에 넘겨주는 용도
+        self.ct_volume = np.stack([s.pixel_array for s in self.d2_slices], axis=-1)
+
+        # hu값으로 변환하고 값 정규화
+        hu_image = self.ct_volume * self.slope + self.intercept
+        self.ct_volume_display = self._normalize_to_uint8(hu_image, self.center_val ,self.width_val)
+
+
+    def segmentation(self, filetype, input_path, roi_organs):
+        """
+        DICOM 파일을 입력받아 TotalSegmentator를 이용해 RTSTRUCT를 생성
+
+        Args:
+            filetype (str): 입력 파일 타입 ('dicom' 또는 'nifti'). 현재는 'dicom'만 지원.
+            input_path (str): DICOM 파일들이 있는 폴더 경로.
+        Returns:
+            str: 생성된 RTSTRUCT 파일의 경로. 오류 발생 시 None 반환.
+        """
+        try:
+            if filetype == 'dicom':
+                # 출력 경로 설정 (입력 폴더 이름 기준)
+                folder_name = os.path.basename(os.path.normpath(input_path))
+                output_path = os.path.join('dcm_output', folder_name)
+                os.makedirs(output_path, exist_ok=True)
+                print(f"segmentation 결과 저장할 경로 : {output_path}")
+
+                # TotalSegmentator 실행
+                totalsegmentator(input_path, output_path, roi_subset=roi_organs, output_type=filetype)
+
+                # 생성된 RTSTRUCT 파일 경로 반환
+                rt_path = os.path.join(output_path,'segmentations.dcm')
+                #rt_path = output_path
+                if os.path.exists(rt_path):
+                    print(f"분할 완료! RTSTRUCT 파일: {rt_path}")
+                    return rt_path
+                else:
+                    print("오류: RTSTRUCT 파일이 생성되지 않았습니다.")
+                    return None
+
+            elif filetype == 'nifti':
+                print("nifti 파일 타입은 아직 구현되지 않았습니다.")
+                return None
+
+        except FileNotFoundError:
+            print("파일 경로를 다시 확인하세요.")
+            return None
+        except Exception as e:
+            print(f"분할 중 오류 발생: {e}")
+            return None 
