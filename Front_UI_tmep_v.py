@@ -840,15 +840,8 @@ class MaskEditor:
             return None 
 
     def verify_dicom_series_match(self, rt_struct_path, dicom_folder_path):
-        """
-        RT-STRUCT 파일과 DICOM 시리즈 폴더의 Series Instance UID가 일치하는지 확인합니다.
-        
-        :param rt_struct_path: RT-STRUCT 파일의 경로
-        :param dicom_folder_path: DICOM 이미지 시리즈 폴더의 경로
-        :return: UID가 일치하면 True, 그렇지 않으면 False를 반환합니다.
-        """
         try:
-            # 1. RT-STRUCT 파일에서 참조하는 Series UID 추출
+            # RT-STRUCT 파일에서 참조하는 Series UID 추출
             rt_dataset = pydicom.dcmread(rt_struct_path)
             # RT-STRUCT 파일은 내부에 어떤 스터디/시리즈를 참조하는지 정보를 가짐
             rt_series_uid = rt_dataset.ReferencedFrameOfReferenceSequence[0] \
@@ -856,7 +849,7 @@ class MaskEditor:
                                     .RTReferencedSeriesSequence[0] \
                                     .SeriesInstanceUID
             
-            # 2. DICOM 폴더의 이미지 파일에서 Series UID 추출
+            # DICOM 폴더의 이미지 파일에서 Series UID 추출
             # 폴더 내 첫 번째 .dcm 파일을 읽어 시리즈 전체의 UID를 확인 (시리즈 내 모든 파일은 UID가 동일)
             dicom_files = [f for f in os.listdir(dicom_folder_path) if f.endswith('.dcm')]
             if not dicom_files:
@@ -867,7 +860,6 @@ class MaskEditor:
             image_dataset = pydicom.dcmread(first_image_path)
             image_series_uid = image_dataset.SeriesInstanceUID
 
-            # 3. 두 UID 비교
             if rt_series_uid == image_series_uid:
                 print("UID 일치 확인: 올바른 DICOM 시리즈입니다.")
                 return True

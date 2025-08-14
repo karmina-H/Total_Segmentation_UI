@@ -5,7 +5,7 @@ from rt_utils.rtstruct import RTStruct
 import pydicom
 import glob
 
-def segmentation(filetype, input_path, task):
+def segmentation(filetype, input_path, roi_organs):
         """
         DICOM 파일을 입력받아 TotalSegmentator를 이용해 RTSTRUCT를 생성
 
@@ -24,7 +24,7 @@ def segmentation(filetype, input_path, task):
                 print(f"segmentation 결과 저장할 경로 : {output_path}")
 
                 # TotalSegmentator 실행
-                totalsegmentator(input_path, output_path, task=task, output_type=filetype)
+                totalsegmentator(input_path, output_path, roi_subset=roi_organs, output_type=filetype)
 
                 # 생성된 RTSTRUCT 파일 경로 반환
                 rt_path = os.path.join(output_path,'segmentations.dcm')
@@ -32,7 +32,7 @@ def segmentation(filetype, input_path, task):
                 if os.path.exists(rt_path):
                     print(f"분할 완료! RTSTRUCT 파일: {rt_path}")
                     return rt_path
-                else: 
+                else:
                     print("오류: RTSTRUCT 파일이 생성되지 않았습니다.")
                     return None
 
@@ -47,45 +47,55 @@ def segmentation(filetype, input_path, task):
             print(f"분할 중 오류 발생: {e}")
             return None 
         
-def get_mask_From_rtstruct(rtstruct_path, d2_slices):
-        # RTSTRUCT 로드 및 마스크 추출 (구버전 방식)
-        print("RTSTRUCT 파일을 로딩합니다...")
-        print(f"로딩중인 파일경로 : {rtstruct_path}")
-        try:
-            rtstruct_dicom = pydicom.dcmread(rtstruct_path)
-            
-            # 로드한 DICOM 슬라이스 목록과 RTSTRUCT를 RTStruct 객체에 전달
-            rtstruct = RTStruct(d2_slices, rtstruct_dicom)
-
-            roi_names = rtstruct.get_roi_names()
-            #rint(f"발견된 ROI: {roi_names}")
-            
-            temp_masks_dict = {}
-            for name in roi_names:
-                # 마스크를 3D numpy 배열로 가져옴 (boolean)
-                mask_3d = rtstruct.get_roi_mask_by_name(name)
-                temp_masks_dict[name] = mask_3d
-            
-            return temp_masks_dict
-                
-        except Exception as e:
-            print(f"RTSTRUCT 로딩 중 오류 발생: {e}")
-            return
-        
 if __name__ == '__main__':
-    task_names = ["total","total_mr","lung_vessels","body","body_mr","vertebrae_mr","cerebral_bleed","hip_implant","pleural_pericard_effusion","head_glands_cavities","head_muscles",
-        "headneck_bones_vessels","headneck_muscles","liver_vessels","oculomotor_muscles","lung_nodules","kidney_cysts","breasts","liver_segments","liver_segments_mr",
-        "craniofacial_structures","abdominal_muscles"]
+    total_segmentator_names = [
+    "spleen", "kidney_right", "kidney_left", "gallbladder", "liver", "stomach", 
+    "pancreas", "adrenal_gland_right", "adrenal_gland_left", "lung_upper_lobe_left", 
+    "lung_lower_lobe_left", "lung_upper_lobe_right", "lung_middle_lobe_right", 
+    "lung_lower_lobe_right", "esophagus", "trachea", "thyroid_gland", 
+    "small_bowel", "duodenum", "colon", "urinary_bladder", "prostate", 
+    "kidney_cyst_left", "kidney_cyst_right", "sacrum", "vertebrae_S1", 
+    "vertebrae_L5", "vertebrae_L4", "vertebrae_L3", "vertebrae_L2", "vertebrae_L1", 
+    "vertebrae_T12", "vertebrae_T11", "vertebrae_T10", "vertebrae_T9", 
+    "vertebrae_T8", "vertebrae_T7", "vertebrae_T6", "vertebrae_T5", "vertebrae_T4", 
+    "vertebrae_T3", "vertebrae_T2", "vertebrae_T1", "vertebrae_C7", "vertebrae_C6", 
+    "vertebrae_C5", "vertebrae_C4", "vertebrae_C3", "vertebrae_C2", "vertebrae_C1", 
+    "heart", "aorta", "pulmonary_vein", "brachiocephalic_trunk", 
+    "subclavian_artery_right", "subclavian_artery_left", "common_carotid_artery_right", 
+    "common_carotid_artery_left", "brachiocephalic_vein_left", 
+    "brachiocephalic_vein_right", "atrial_appendage_left", "superior_vena_cava", 
+    "inferior_vena_cava", "portal_vein_and_splenic_vein", "iliac_artery_left", 
+    "iliac_artery_right", "iliac_vena_left", "iliac_vena_right", "humerus_left", 
+    "humerus_right", "scapula_left", "scapula_right", "clavicula_left", 
+    "clavicula_right", "femur_left", "femur_right", "hip_left", "hip_right", 
+    "spinal_cord", "gluteus_maximus_left", "gluteus_maximus_right", 
+    "gluteus_medius_left", "gluteus_medius_right", "gluteus_minimus_left", 
+    "gluteus_minimus_right", "autochthon_left", "autochthon_right", 
+    "iliopsoas_left", "iliopsoas_right", "brain", "skull", "rib_left_1", 
+    "rib_left_2", "rib_left_3", "rib_left_4", "rib_left_5", "rib_left_6", 
+    "rib_left_7", "rib_left_8", "rib_left_9", "rib_left_10", "rib_left_11", 
+    "rib_left_12", "rib_right_1", "rib_right_2", "rib_right_3", "rib_right_4", 
+    "rib_right_5", "rib_right_6", "rib_right_7", "rib_right_8", "rib_right_9", 
+    "rib_right_10", "rib_right_11", "rib_right_12", "sternum", "costal_cartilages"
+]
+
 
     input_path = 'dcm_data1' 
 
-    for task in task_names:
-        start_time = time.time()
-        segmentation('dicom',input_path,task)
-        end_time = time.time()
-        execution_time = end_time - start_time
-        with open("execution_log.txt", "a") as f:
-            f.write(f"{task} segmentation runtime: {execution_time:.4f}(sec) \n")
+    # for organ in total_segmentator_names:
+    #     list_l = [organ]
+    #     start_time = time.time()
+    #     segmentation('dicom',input_path,list_l)
+    #     end_time = time.time()
+    #     execution_time = end_time - start_time
+    #     with open("organs_inference_execution_ti.txt", "a") as f:
+    #         f.write(f"{organ} segmentation runtime: {execution_time:.4f}(sec) \n")
+    start_time = time.time()
+    segmentation('dicom',input_path,total_segmentator_names)
+    end_time = time.time()
+    execution_time = end_time - start_time
+    with open("organs_inference_execution_ti.txt", "a") as f:
+        f.write(f"total segmentation runtime: {execution_time:.4f}(sec) \n")
 
 
 
