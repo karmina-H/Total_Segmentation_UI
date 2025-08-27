@@ -14,29 +14,6 @@ import time
 from rt_utils import RTStructBuilder
 import torch
 
-import monai
-from monai.config import print_config
-
-from monai.apps.deepedit.transforms import (
-    AddGuidanceSignalDeepEditd,
-    AddGuidanceFromPointsDeepEditd,
-    ResizeGuidanceMultipleLabelDeepEditd,
-)
-from monai.transforms import (
-    Activationsd,
-    AsDiscreted,
-    EnsureChannelFirstd,
-    EnsureTyped,
-    LoadImaged,
-    Orientationd,
-    Resized,
-    ScaleIntensityRanged,
-    SqueezeDimd,
-    ToNumpyd,
-    ToTensord,
-)
-from monai.networks.nets import DynUNet
-
 '''
 좌클릭 -> 추가 mask생성
 우클릭 -> ct사진 이동

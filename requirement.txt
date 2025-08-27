@@ -1,0 +1,19 @@
+python=3.10 로 가상환경 생성하고 밑에 있는거 설치
+
+pip install TotalSegmentator
+
+pip install xmltodict
+
+pip install rt_utils "numpy==1.26.4”
+
+pip install blosc2
+
+pip uninstall torch
+
+conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+
+pip install tkinterdnd2
+
+pip install dicom2nifti
+
+나중에 실행 다시 안되면 numpy제거후 다시설치
