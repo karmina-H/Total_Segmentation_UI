@@ -13,6 +13,8 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 import time
 from rt_utils import RTStructBuilder
 import torch
+import SimpleITK as sitk
+
 
 '''
 좌클릭 -> 추가 mask생성
@@ -773,6 +775,50 @@ class MaskEditor:
         hu_image = self.ct_volume * self.slope + self.intercept
         self.ct_volume_display = self._normalize_to_uint8(hu_image, self.center_val ,self.width_val)
 
+        print("원본 DICOM 로딩완료")
+
+    def dicom_to_np_v2(self, dicom_series_path):
+        """
+        SimpleITK를 사용하여 DICOM 시리즈를 안정적으로 로드하고 NumPy 배열로 변환합니다.
+        """
+        print("SimpleITK를 사용하여 원본 DICOM 시리즈를 로딩합니다...")
+        
+        try:
+            # 1. SimpleITK를 사용해 폴더 내의 DICOM 시리즈를 읽어 3D 이미지로 재구성
+            reader = sitk.ImageSeriesReader()
+            dicom_names = reader.GetGDCMSeriesFileNames(dicom_series_path)
+            if not dicom_names:
+                print(f"오류: '{dicom_series_path}' 폴더에 DICOM 파일이 없습니다.")
+                return None, None
+
+            reader.SetFileNames(dicom_names)
+            image_sitk = reader.Execute()
+            
+            # 3D NumPy 배열로 변환 (결과 배열의 축 순서는 Z, Y, X가 됨)
+            ct_volume_zyx = sitk.GetArrayFromImage(image_sitk)
+            
+            # 원래 코드의 축 순서(Y, X, Z)와 맞추기 위해 축을 변환
+            self.ct_volume = np.transpose(ct_volume_zyx, (1, 2, 0))
+
+            # 2. 메타데이터는 pydicom으로 첫 번째 파일만 읽어서 가져오기
+            first_slice = pydicom.dcmread(dicom_names[0], force=True)
+            
+            self.slope = float(first_slice.get('RescaleSlope', 1.0))
+            self.intercept = float(first_slice.get('RescaleIntercept', -1024.0)) # CT는 보통 -1024가 기본값
+            self.center_val = first_slice.get('WindowCenter', 40)
+            self.width_val = first_slice.get('WindowWidth', 400)
+
+            # 3. HU 변환 및 정규화
+            hu_image = self.ct_volume.astype(np.float64) * self.slope + self.intercept
+            
+            # _normalize_to_uint8 함수는 이미 구현되어 있다고 가정
+            self.ct_volume_display = self._normalize_to_uint8(hu_image, self.center_val, self.width_val)
+            
+            print("DICOM 로딩 완료 (SimpleITK 사용)")
+
+        except Exception as e:
+            print(f"오류: SimpleITK로 DICOM 시리즈를 읽는 데 실패했습니다. 에러: {e}")
+            return None, None
 
     def segmentation(self, filetype, input_path, roi_organs):
         """
