@@ -137,7 +137,7 @@ def evaluate_by_order(pred_folder, gt_folder, k_from_end=12, count=16, threshold
     return results
 
 if __name__ == "__main__":
-    pred_folder = r"./GT_TEST/totalsegmentator_spleen"   # 예측 폴더
+    pred_folder = r"./GT_TEST/Segmentation_plane"   # 예측 폴더
     gt_folder   = r"./GT_TEST/Mask_Spleen"     # GT 폴더
 
     k_from_end = 12  # 뒤에서 12번째를 끝점(포함)
