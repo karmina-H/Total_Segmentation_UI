@@ -3,11 +3,11 @@ import SimpleITK as sitk
 import imageio
 
 # 저장 폴더 설정
-output_dir = "./GT_TEST/Segmentation_plane"
+output_dir = "./GT_TEST/Segmentation_liver_first"
 os.makedirs(output_dir, exist_ok=True)
 
 # NRRD 파일 읽기
-img = sitk.ReadImage("./GT_TEST/Segmentation_plane.nrrd")
+img = sitk.ReadImage("./GT_TEST/Segmentation_liver_first.nrrd")
 arr = sitk.GetArrayFromImage(img)  # (z, y, x)
 
 # PNG로 저장

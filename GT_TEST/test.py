@@ -4,8 +4,8 @@ from pydicom.uid import ExplicitVRLittleEndian
 from pydicom.tag import Tag
 
 # ====== 경로 수정 ======
-INPUT_DIR  = r"C:\Users\gusdb\Desktop\Total_Segmentation_UI\GT_TEST\DCM"
-OUTPUT_DIR = r"C:\Users\gusdb\Desktop\Total_Segmentation_UI\GT_TEST\DCM_uncompressed"
+INPUT_DIR  = r"C:\Users\gusdb\Desktop\Total_Segmentation_UI\GT_TEST\DCM2"
+OUTPUT_DIR = r"C:\Users\gusdb\Desktop\Total_Segmentation_UI\GT_TEST\DCM2_uncompressed"
 # ======================
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
